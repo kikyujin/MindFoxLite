@@ -1,4 +1,4 @@
-# 🦊 MindFoxLite🎈
+# 🦊 MindFoxLite v0.2 🎈
 
 **マルチエージェント・ストーリージェネレーター**
 
@@ -10,6 +10,8 @@
 - **ターン制** — 1ターンごとにmdファイルを出力して停止。ユーザーが修正可能
 - **キャラ独立** — 各キャラをランダム順で個別にLLM呼び出し
 - **最小構成** — Python 1ファイル + world.md + agents.json だけ
+- **inner_voice** — キャラの内なる声（上位権力者・民意など）を表現可能
+- **ジャンル自由** — world.md のトーンセクションから自動取得。韓ドラでもSFでも
 
 ## 必要環境
 
@@ -20,17 +22,22 @@
 ## ファイル構成
 
 ```
-mindfoxlite/
-├── mindfoxlite.py     メインスクリプト
-├── world.md        世界設定
-├── agents.json     キャラクター定義
-├── README.md       このファイル
-├── output_sample/  実行結果のサンプル
-└── output/         （実行時に自動生成）
+MindFoxLite/
+├── mindfoxlite.py      メインスクリプト
+├── README.md           このファイル
+├── mire_defense/       韓国企業ドラマシナリオ
+│   ├── world.md
+│   ├── agents.json
+│   └── *.md            実行結果
+├── hawaii2035/         SF シナリオ
+│   ├── world.md
+│   ├── agents.json
+│   └── *.md            実行結果
+└── output/             （実行時に自動生成）
     ├── turn_01.md
     ├── turn_02.md
     ├── ...
-    └── story.md    全ターン結合版
+    └── story.md        全ターン結合版
 ```
 
 ## 使い方
@@ -39,11 +46,12 @@ mindfoxlite/
 # セットアップ
 pip install requests
 
-# 基本
+# 基本（カレントディレクトリの world.md + agents.json を使用）
 python mindfoxlite.py
 
-# 引数指定
-python mindfoxlite.py world.md agents.json 6
+# シナリオを指定して実行
+python mindfoxlite.py mire_defense/world.md mire_defense/agents.json 6
+python mindfoxlite.py hawaii2035/world.md hawaii2035/agents.json 6
 
 # リモートOllama
 python mindfoxlite.py world.md agents.json 6 http://m4max.local:11434
@@ -77,6 +85,13 @@ Markdown形式で自由に記述。舞台、ルール、トーンを定義する
       "motivation": "このシミュレーションでの動機・目標",
       "relationships": {
         "other_agent_id": "関係の説明"
+      },
+      // v0.2: inner_voice（省略可）
+      "inner_voice": {
+        "name": "内なる声の名前",
+        "tone": "声の性質",
+        "trigger": "出現タイミング",
+        "format": "表現形式"
       }
     }
   ]

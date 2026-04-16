@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
 """
-MindFoxLite - Simple Multi-Agent Story Generator
+MindFoxLite v0.2 - Multi-Agent Story Generator
 ================================================
 マルチエージェントによる物語自動生成ツール。
 各キャラクターがLLMで独立に行動し、ターンごとにmdファイルを出力する。
+
+v0.2 changes:
+  - inner_voice 機能追加（キャラの内なる声／上位権力者／民意などを表現）
+  - ジャンル決め打ち除去（world.md の「## トーン」セクションから自動取得）
+  - story.md タイトルを world.md の最初の見出しから自動抽出
 
 Usage:
     python mindfoxlite.py [world.md] [agents.json] [max_turns] [ollama_url]
@@ -16,6 +21,7 @@ Examples:
 
 import json
 import random
+import re
 import sys
 import time
 import requests
@@ -50,6 +56,32 @@ def load_agents(path: str) -> list[dict]:
         sys.exit(1)
     data = json.loads(p.read_text(encoding="utf-8"))
     return data["agents"]
+
+
+def extract_title(world: str) -> str:
+    """world.md の最初の H1 見出しからタイトルを抽出する。
+    無ければ "Untitled Story" を返す。
+    """
+    for line in world.splitlines():
+        line = line.strip()
+        if line.startswith("# "):
+            return line[2:].strip()
+    return "Untitled Story"
+
+
+def extract_tone(world: str) -> str:
+    """world.md の「## トーン」または「## この物語のトーン」セクションを
+    抽出する。無ければ汎用デフォルトを返す。
+    """
+    # ## トーン または ## この物語のトーン などにマッチ
+    pattern = re.compile(
+        r"^##\s*(?:この物語の)?トーン\s*$(.*?)(?=^##\s|\Z)",
+        re.MULTILINE | re.DOTALL,
+    )
+    m = pattern.search(world)
+    if m:
+        return m.group(1).strip()
+    return "登場人物の心理と人間関係を丁寧に描く、ドラマチックな物語"
 
 
 # ─── Ollama API ──────────────────────────────────────────────
@@ -97,17 +129,44 @@ def call_ollama(
 
 # ─── Prompt Construction ─────────────────────────────────────
 
-def build_system_prompt(world: str, agent: dict) -> str:
+def build_inner_voice_block(agent: dict) -> str:
+    """inner_voice フィールドがあれば専用ブロックを返す。なければ空文字。"""
+    iv = agent.get("inner_voice")
+    if not iv:
+        return ""
+
+    return f"""
+## あなたの内なる声
+あなたの心の中には「{iv['name']}」の声が住んでいる。
+この声は、あなたの判断や決断に影響を与え、時に葛藤を生む。
+
+- 性質: {iv.get('tone', '')}
+- 出現タイミング: {iv.get('trigger', '重要な決断や感情の高まる場面')}
+- 表現形式: {iv.get('format', '地の文の括弧内に独白として挿入。1ターンに0〜2回、自然な場面でのみ。')}
+
+この声は他のキャラクターには聞こえない。あなただけが知る、内なる声である。
+"""
+
+
+def build_system_prompt(
+    world: str, tone: str, agent: dict, id_to_label: dict | None = None
+) -> str:
     """キャラクター用のシステムプロンプトを組み立てる"""
+    id_to_label = id_to_label or {}
     rels = "\n".join(
-        f"  - {aid}: {desc}"
+        f"  - {id_to_label.get(aid, aid)}: {desc}"
         for aid, desc in agent.get("relationships", {}).items()
     )
 
-    return f"""あなたは韓国ドラマの脚本家として、指定されたキャラクターの視点でシーンを執筆します。
+    inner_voice_block = build_inner_voice_block(agent)
+
+    return f"""あなたは小説家として、指定されたキャラクターの視点でシーンを執筆します。
 
 ## 世界設定
 {world}
+
+## 物語のトーン
+{tone}
 
 ## あなたが演じるキャラクター
 - 名前: {agent['name']}
@@ -117,7 +176,7 @@ def build_system_prompt(world: str, agent: dict) -> str:
 - 動機: {agent['motivation']}
 - 人間関係:
 {rels}
-
+{inner_voice_block}
 ## 執筆ルール
 - {agent['name']}の視点で、このターンの行動・心理・台詞を書く
 - 三人称（「{agent['name']}は〜」）で記述
@@ -125,7 +184,7 @@ def build_system_prompt(world: str, agent: dict) -> str:
 - 他キャラとの直接的なやりとりがあれば対話を含める
 - 300〜500字程度
 - 感情描写を丁寧に。視線、仕草、表情で内面を表現する
-- 韓国ドラマらしいドラマチックさを意識する
+- 上記「物語のトーン」に沿った筆致を意識する
 """
 
 
@@ -163,7 +222,7 @@ def generate_summary(
     system = f"""あなたは物語の語り手です。
 このターンの出来事を250字以内で要約してください。
 - 権力関係の変化
-- 恋愛模様の進展
+- 各勢力の駆け引きの進展
 - 次ターンへの伏線
 に注目して簡潔にまとめてください。
 
@@ -177,9 +236,11 @@ def run_turn(
     base_url: str,
     model: str,
     world: str,
+    tone: str,
     agents: list[dict],
     turn_num: int,
     history_summaries: list[str],
+    id_to_label: dict | None = None,
 ) -> tuple[str, str]:
     """
     1ターンを実行する。
@@ -193,17 +254,22 @@ def run_turn(
 
     for idx in order:
         agent = agents[idx]
-        print(f"  🎭 {agent['name']}（{agent['archetype']}）…", end="", flush=True)
+        iv_marker = " 🗣️" if agent.get("inner_voice") else ""
+        print(
+            f"  🎭 {agent['name']}（{agent['archetype']}{iv_marker}）…",
+            end="",
+            flush=True,
+        )
         t0 = time.time()
 
-        system = build_system_prompt(world, agent)
+        system = build_system_prompt(world, tone, agent, id_to_label)
         user = build_user_prompt(agent, turn_num, history_summaries, earlier)
         response = call_ollama(base_url, model, system, user)
 
         elapsed = time.time() - t0
         print(f" {elapsed:.1f}s ✅")
 
-        section = f"## {agent['name']}（{agent['role']}）\n\n{response}"
+        section = f"## {agent['name']}({agent['role']})\n\n{response}"
         sections.append(section)
         earlier += f"\n### {agent['name']}\n{response}\n"
 
@@ -237,7 +303,7 @@ def main():
     # ヘッダー表示
     print()
     print("╔══════════════════════════════════════════════╗")
-    print("║   🦊 MindFoxLite                            ║")
+    print("║   🦊 MindFoxLite v0.2                        ║")
     print("║   Multi-Agent Story Generator                ║")
     print("╚══════════════════════════════════════════════╝")
     print()
@@ -251,10 +317,21 @@ def main():
     # ファイル読み込み
     world = load_world(world_path)
     agents = load_agents(agents_path)
+    title = extract_title(world)
+    tone = extract_tone(world)
 
+    # agent_id → "名前（役職）" のルックアップ
+    # (relationships 表示でスラッグを実名に変換し、LLM の誤認を防ぐ)
+    id_to_label = {
+        a["agent_id"]: f"{a['name']}（{a['role']}）" for a in agents
+    }
+
+    print(f"  📚 タイトル: {title}")
     print(f"  登場人物 ({len(agents)}名):")
     for a in agents:
-        print(f"    - {a['name']}（{a['role']}）[{a['archetype']}]")
+        iv = a.get("inner_voice")
+        iv_str = f" 🗣️[{iv['name']}]" if iv else ""
+        print(f"    - {a['name']}({a['role']}) [{a['archetype']}]{iv_str}")
     print()
 
     # Ollamaの接続確認
@@ -288,7 +365,8 @@ def main():
         print(f"{'─' * 50}")
 
         md, summary = run_turn(
-            ollama_url, model, world, agents, turn, history_summaries
+            ollama_url, model, world, tone, agents, turn, history_summaries,
+            id_to_label,
         )
 
         # ファイル出力
@@ -301,7 +379,7 @@ def main():
             print()
             print(f"  📝 {turn_file} を確認・修正してください。")
             print(f"     修正すると次ターンに反映されます。")
-            print(f"     （'q' で中断、Enter で続行）")
+            print(f"     ('q' で中断、Enter で続行)")
             user_input = input("  > ").strip()
             if user_input.lower() == "q":
                 print("\n  🛑 中断しました。")
@@ -312,7 +390,7 @@ def main():
             if "### 状況まとめ" in md:
                 summary = md.split("### 状況まとめ")[-1].strip()
         else:
-            print("\n  🎬 最終ターン完了！")
+            print("\n  🎬 最終ターン完了!")
 
         history_summaries.append(summary)
         history_mds.append(md)
@@ -321,16 +399,16 @@ def main():
     if history_mds:
         story_file = OUTPUT_DIR / "story.md"
         ts = datetime.now().strftime("%Y-%m-%d %H:%M")
-        header = f"# ミレ・ディフェンスの愛と野望\n\n"
-        header += f"*Generated by MindFoxLite on {ts}*\n\n"
+        header = f"# {title}\n\n"
+        header += f"*Generated by MindFoxLite v0.2 on {ts}*\n\n"
         header += f"*Model: {model} | Turns: {len(history_mds)}*\n\n---\n\n"
         body = "\n\n---\n\n".join(history_mds)
         story_file.write_text(header + body, encoding="utf-8")
 
         print()
         print("╔══════════════════════════════════════════════╗")
-        print(f"║  📚 完成！ {story_file}              ║")
-        print(f"║  🎭 {len(agents)}キャラ × {len(history_mds)}ターン              ║")
+        print(f"  📚 完成! {story_file}")
+        print(f"  🎭 {len(agents)}キャラ × {len(history_mds)}ターン")
         print("╚══════════════════════════════════════════════╝")
         print()
 
