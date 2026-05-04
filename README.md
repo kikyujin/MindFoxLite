@@ -4,6 +4,8 @@
 
 各キャラクターが独立したLLMエージェントとして行動し、ターンごとに物語を紡ぐシンプルなツール。
 
+> 💡 **Looking for the Rust middleware?** See [MindFox](https://github.com/kikyujin/MindFox) — the production-grade version with SQLite persistence, forgetting, ACL, C API, and crates.io packages.
+
 ## 特徴
 
 - **ローカル完結** — Ollama + gemma4:26b で動作。APIキー不要
