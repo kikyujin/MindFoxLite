@@ -26,6 +26,7 @@
 ```
 MindFoxLite/
 ├── mindfoxlite.py      メインスクリプト
+├── indian_poker.py     インディアンポーカー（ミニゲーム）
 ├── README.md           このファイル
 ├── mire_defense/       韓国企業ドラマシナリオ
 │   ├── world.md
@@ -106,6 +107,22 @@ Markdown形式で自由に記述。舞台、ルール、トーンを定義する
 
 ```python
 DEFAULT_MODEL = "gemma4:12b"  # 軽量版
+```
+
+## Indian Poker — AI娘とそんなことしてインディアン⁉️
+
+AI館のメンバー（スミレ・エルマー・ノクちん・ティル・ヴェリ）とインディアンポーカーで遊ぶミニゲーム。
+
+- **判断エンジン**: 勝率計算はPython、bet/fold＋セリフ選択はLLM（gemma4:e2b）
+- **感情システム**: チップ残量・連敗で口調が calm → shaken → desperate → awakened に変化
+- **三味線**: AI娘がマスターにアドバイス（正直とは限らない）
+
+```bash
+# デフォルト（6ラウンド）
+python indian_poker.py
+
+# ラウンド数・Ollama URL・モデルを指定
+python indian_poker.py 6 http://m4max.local:11434 gemma4:26b
 ```
 
 ## ライセンス
